@@ -33,6 +33,7 @@ public class LogGenerator implements Runnable{
     public void run() {
         System.out.println("Starting log generator (ipAddr=" + ipAddr + ", sessionId=" + sessionId + ", durationSeconds=" + durationSeconds);
         
+        // Kafka Producer props 
         Properties props = new Properties();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
         props.put(ProducerConfig.CLIENT_ID_CONFIG, "LogGenerator");
@@ -68,6 +69,7 @@ public class LogGenerator implements Runnable{
 
         System.out.println("Stopping log generator (ipAddr=" + ipAddr + ", sessionId=" + sessionId + ", durationSeconds=" + durationSeconds);
 
+        // Thread exit
         this.latch.countDown();
     }
 
