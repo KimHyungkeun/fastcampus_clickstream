@@ -1,5 +1,9 @@
 package com.fastcampus.clickstream;
 
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+
 public class WebLog {
     private String ipAddr;
     private Long timestamp;
@@ -72,6 +76,12 @@ public class WebLog {
     }
     public void setSessionId(String sessionId) {
         this.sessionId = sessionId;
+    }
+
+    @Override
+    public String toString() {
+        OffsetDateTime offsetDateTime = OffsetDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.systemDefault());
+        return String.format("WebLog(ipAddr-#, timestamp=%s, method=%s, responseCode=%s, responseTime=%s, sessionId=%s)", ipAddr, offsetDateTime, method, responseCode, responseTime, sessionId);
     }
 
     
