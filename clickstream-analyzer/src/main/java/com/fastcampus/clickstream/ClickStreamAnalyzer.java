@@ -1,5 +1,6 @@
 package com.fastcampus.clickstream;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
@@ -15,6 +16,9 @@ import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.connector.jdbc.JdbcConnectionOptions;
+import org.apache.flink.connector.jdbc.JdbcExecutionOptions;
+import org.apache.flink.connector.jdbc.JdbcSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -28,7 +32,7 @@ public class ClickStreamAnalyzer {
         ACTIVE_SESSION, ADS_PER_SECOND, REQUEST_PER_SECOND, ERROR_PER_SECOND
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment()
             .setParallelism(4);
 
@@ -47,10 +51,71 @@ public class ClickStreamAnalyzer {
         DataStream<WebLog> webLogDataStream = dataStream.map(new WebLogMapFunction());
         webLogDataStream.print();
 
-        webLogDataStream
+        // 1. 현재 활성 유저(Session) 정보
+        DataStream<Tuple2<Long, Map<DataType, Integer>>> activeSessionDataStream = webLogDataStream
             .keyBy(t -> 1)
             .process(new ActiveSessionCountFucntion())
             .map(new OutputMapFunction(DataType.ACTIVE_SESSION));
+        
+        // 2. 초당 클릭되는 광고 횟수
+        DataStream<Tuple2<Long, Map<DataType, Integer>>> adsClickPerSecondDataStream = webLogDataStream
+            .filter(l -> l.getUrl().startsWith("/ads"))
+            .keyBy(t -> 1)
+            .process(new RequestPerSecondFunction())
+            .map(new OutputMapFunction(DataType.ADS_PER_SECOND));
+        
+        // 3. 초당 요청되는 횟수
+        DataStream<Tuple2<Long, Map<DataType, Integer>>> requestPerSecondDataStream = webLogDataStream
+            .keyBy(t -> 1)
+            .process(new RequestPerSecondFunction())
+            .map(new OutputMapFunction(DataType.REQUEST_PER_SECOND));
+        
+        // 4. 초당 발생하는 에러 발생 수
+        DataStream<Tuple2<Long, Map<DataType, Integer>>> errorPerSecondDataStream = webLogDataStream
+            .filter(l -> Integer.parseInt(l.getResponseCode()) >= 400)
+            .keyBy(t -> 1)
+            .process(new RequestPerSecondFunction())
+            .map(new OutputMapFunction(DataType.ERROR_PER_SECOND));
+        
+        // 위 4개의 request를 하나로 합함
+        DataStream<Tuple2<Long, Map<DataType, Integer>>> restulDataStream = activeSessionDataStream
+            .union(adsClickPerSecondDataStream)
+            .union(requestPerSecondDataStream)
+            .union(errorPerSecondDataStream)
+            .keyBy(t -> t.f0)
+            .reduce((value1, value2) -> {
+                value2.f1.forEach((key, value) -> value1.f1.merge(key, value, (v1, v2) -> v1 >= v2 ? v1 : v2));
+                return value1;
+            });
+        
+        restulDataStream.print();
+
+        // 해당 결과를 mysql DB에 저장하도록 함
+        restulDataStream.addSink(
+            JdbcSink.sink(
+                "REPLACE INTO stats (ts, active_session, ads_per_second, request_per_second, error_per_second) values (?,?,?,?,?)",
+                (statement, tuple) -> {
+                    Timestamp timestamp = new Timestamp(tuple.f0);
+                    statement.setTimestamp(1, timestamp);
+                    statement.setInt(2, tuple.f1.getOrDefault(DataType.ACTIVE_SESSION, 0));
+                    statement.setInt(3, tuple.f1.getOrDefault(DataType.ADS_PER_SECOND, 0));
+                    statement.setInt(4, tuple.f1.getOrDefault(DataType.REQUEST_PER_SECOND, 0));
+                    statement.setInt(5, tuple.f1.getOrDefault(DataType.ERROR_PER_SECOND, 0));
+                },
+                JdbcExecutionOptions.builder()
+                    .withBatchSize(200)
+                    .withBatchIntervalMs(200)
+                    .build(),
+                new JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
+                    .withUrl("jdbc:mysql://localhost:3306/clickstream")
+                    .withDriverName("com.mysql.cj.jdbc.Driver")
+                    .withUsername("root")
+                    .withPassword("root")
+                    .build()
+            )
+        );
+
+        env.execute("Clickstream Analyzer");
     }
 
     public static class WebLogMapFunction implements MapFunction<String, WebLog> {
@@ -133,5 +198,56 @@ public class ClickStreamAnalyzer {
             return Tuple2.of(value.f0, map);
         }
         
+    }
+
+    public static class RequestPerSecondFunction extends KeyedProcessFunction<Integer, WebLog, Tuple2<Long, Integer>> {
+        private transient ValueState<Long> timeValueState;
+        private transient ValueState<Integer> countState;
+        private static final long INTERVAL = 1000;
+
+        @Override
+        public void open(Configuration parameters) throws Exception {
+           ValueStateDescriptor<Long> valueStateDescriptor =
+            new ValueStateDescriptor<>("filename", TypeInformation.of(new TypeHint<Long>() {}));
+            timeValueState = getRuntimeContext().getState(valueStateDescriptor);
+            
+            ValueStateDescriptor<Integer> countStateDescriptor =
+            new ValueStateDescriptor<>("requestCount", TypeInformation.of(new TypeHint<Integer>() {}));
+            countState = getRuntimeContext().getState(countStateDescriptor);
+        }
+
+        @Override
+        public void processElement(WebLog value,
+                KeyedProcessFunction<Integer, WebLog, Tuple2<Long, Integer>>.Context ctx,
+                Collector<Tuple2<Long, Integer>> out) throws Exception {
+            long timestamp = ctx.timerService().currentProcessingTime();
+            long nextTimerTimestamp = timestamp - (timestamp % INTERVAL) + INTERVAL;
+            if (timeValueState.value() == null) {
+                timeValueState.update(nextTimerTimestamp);
+                ctx.timerService().registerEventTimeTimer(nextTimerTimestamp);
+            }
+
+            if (countState.value() == null) {
+                countState.update(0);
+            }
+
+            if (nextTimerTimestamp - INTERVAL <= value.getTimestamp() && value.getTimestamp() <= nextTimerTimestamp) {
+                countState.update(countState.value() + 1);
+            }
+            
+        }
+
+        @Override
+        public void onTimer(long timestamp,
+                KeyedProcessFunction<Integer, WebLog, Tuple2<Long, Integer>>.OnTimerContext ctx,
+                Collector<Tuple2<Long, Integer>> out) throws Exception {
+            long currentProcessingTime = (ctx.timerService().currentProcessingTime() / 1000) * 1000;
+
+            out.collect(Tuple2.of(currentProcessingTime, countState.value()));
+
+            long nextTimerTimestamp = timestamp + INTERVAL;
+            ctx.timerService().registerProcessingTimeTimer(nextTimerTimestamp);
+        }      
+
     }
 }

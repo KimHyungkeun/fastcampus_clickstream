@@ -81,7 +81,7 @@ public class WebLog {
     @Override
     public String toString() {
         OffsetDateTime offsetDateTime = OffsetDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.systemDefault());
-        return String.format("WebLog(ipAddr-#, timestamp=%s, method=%s, responseCode=%s, responseTime=%s, sessionId=%s)", ipAddr, offsetDateTime, method, responseCode, responseTime, sessionId);
+        return String.format("WebLog(ipAddr=%s, timestamp=%s, method=%s, responseCode=%s, responseTime=%s, sessionId=%s)", ipAddr, offsetDateTime, method, responseCode, responseTime, sessionId);
     }
 
     
