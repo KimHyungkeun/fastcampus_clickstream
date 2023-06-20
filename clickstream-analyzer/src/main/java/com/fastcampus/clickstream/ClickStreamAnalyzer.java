@@ -37,7 +37,6 @@ public class ClickStreamAnalyzer {
             .setParallelism(4);
 
         // Kafka Source로부터 데이터를 String 값으로 읽어온다 
-        String bootstrapServers = "localhost:9092";
         KafkaSource<String> source = KafkaSource.<String>builder()
             .setBootstrapServers("localhost:9092")
             .setTopics("weblog")
@@ -201,7 +200,7 @@ public class ClickStreamAnalyzer {
     }
 
     public static class RequestPerSecondFunction extends KeyedProcessFunction<Integer, WebLog, Tuple2<Long, Integer>> {
-        private transient ValueState<Long> timeValueState;
+        private transient ValueState<Long> timerValueState;
         private transient ValueState<Integer> countState;
         private static final long INTERVAL = 1000;
 
@@ -209,7 +208,7 @@ public class ClickStreamAnalyzer {
         public void open(Configuration parameters) throws Exception {
            ValueStateDescriptor<Long> valueStateDescriptor =
             new ValueStateDescriptor<>("filename", TypeInformation.of(new TypeHint<Long>() {}));
-            timeValueState = getRuntimeContext().getState(valueStateDescriptor);
+            timerValueState = getRuntimeContext().getState(valueStateDescriptor);
             
             ValueStateDescriptor<Integer> countStateDescriptor =
             new ValueStateDescriptor<>("requestCount", TypeInformation.of(new TypeHint<Integer>() {}));
@@ -222,9 +221,9 @@ public class ClickStreamAnalyzer {
                 Collector<Tuple2<Long, Integer>> out) throws Exception {
             long timestamp = ctx.timerService().currentProcessingTime();
             long nextTimerTimestamp = timestamp - (timestamp % INTERVAL) + INTERVAL;
-            if (timeValueState.value() == null) {
-                timeValueState.update(nextTimerTimestamp);
-                ctx.timerService().registerEventTimeTimer(nextTimerTimestamp);
+            if (timerValueState.value() == null) {
+                timerValueState.update(nextTimerTimestamp);
+                ctx.timerService().registerProcessingTimeTimer(nextTimerTimestamp);
             }
 
             if (countState.value() == null) {
