@@ -5,6 +5,7 @@
  - 클릭스트림(ClickStream) : 사용자가 웹사이트를 탐색한 내역을 확인하는 것
    
 **2) 기술스택**
+ - CentOS7 (OS)
  - Java OpenJDK 1.8.0_372
  - Docker 24.0.2 
  - Docker Compose 2.18.1 (Kafka를 docker-compose를 이용해 띄우기 위함)
