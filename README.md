@@ -7,7 +7,7 @@
 **2) 기술스택**
  - Java OpenJDK 1.8.0_372
  - Docker 24.0.2 
- - Docker Compose 2.18.1 (Kafka를 docker-compose를 띄우기 위함)
+ - Docker Compose 2.18.1 (Kafka를 docker-compose를 이용해 띄우기 위함)
  - Kafka confluentinc:7.0.1
  - Flink 1.15.0
  - MySQL 8.0.33 MySQL Community Server
